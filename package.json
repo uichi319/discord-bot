@@ -4,12 +4,14 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-  "start": "node index.js"
-},
+    "start": "node index.js"
+  },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "discord.js": "^14.26.3"
+    "discord.js": "^14.26.3",
+    "express": "^5.2.1",
+    "googleapis": "^171.4.0"
   }
 }

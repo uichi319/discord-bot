@@ -1,31 +1,42 @@
 const { Client, GatewayIntentBits } = require('discord.js');
 
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent
-  ]
+const express = require('express');
+const app = express();
+
+app.get('/', (req, res) => {
+  res.send('Bot is alive!');
 });
 
-// Renderでは環境変数からTOKENを読む
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Web server running on port ${PORT}`);
+});
+
+const client = new Client({
+  intents: [GatewayIntentBits.Guilds]
+});
+
 const TOKEN = process.env.TOKEN;
 
-// 話題リスト
-const topics = [
-  "好きな寿司ネタは？",
-  "最近ハマってることは？",
-  "おすすめのゲームは？",
-  "子供の頃の思い出は？",
-  "行ってみたい国は？"
-];
+const topics = {
+  tp: ["共通1", "共通2"],
+  fd: ["好きな寿司ネタは？"],
+  pst: ["子供の頃の思い出は？"],
+  ftr: ["将来やりたいことは？"],
+  lv: ["理想のデートは？"],
+  ad: ["ちょっと大人な質問"]
+};
 
-client.on('messageCreate', message => {
-  if (message.author.bot) return;
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isChatInputCommand()) return;
 
-  if (message.content === '!topic') {
-    const random = topics[Math.floor(Math.random() * topics.length)];
-    message.reply(`お題：${random}`);
+  const cmd = interaction.commandName;
+
+  if (topics[cmd]) {
+    const list = topics[cmd];
+    const random = list[Math.floor(Math.random() * list.length)];
+
+    await interaction.reply(random);
   }
 });
 
