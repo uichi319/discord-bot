@@ -4,11 +4,12 @@ const express = require('express');
 
 const app = express();
 
-// Webサーバー（スリープ対策）
 app.get('/', (req, res) => {
   res.send('Bot is alive!');
 });
-app.listen(process.env.PORT || 3000);
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT);
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
@@ -17,50 +18,104 @@ const client = new Client({
 const TOKEN = process.env.TOKEN;
 const SHEET_ID = process.env.SHEET_ID;
 
-// Google Sheets取得
-async function getTopics() {
+const ALL_TYPES = ['fd', 'pst', 'ftr', 'lv', 'ad'];
+
+// ===== Google Sheets =====
+async function getSheets() {
   const auth = new google.auth.GoogleAuth({
     credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
-    scopes: ['https://www.googleapis.com/auth/spreadsheets.readonly']
+    scopes: ['https://www.googleapis.com/auth/spreadsheets']
   });
 
-  const sheets = google.sheets({ version: 'v4', auth });
+  return google.sheets({ version: 'v4', auth });
+}
+
+// ===== データ取得 =====
+async function getRows() {
+  const sheets = await getSheets();
 
   const res = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
-    range: 'Sheet1!A:B'
+    range: 'topic!A:C'
   });
 
-  return res.data.values;
+  return res.data.values || [];
 }
 
-// ランダム取得
+// ===== 使用済み更新 =====
+async function markAsUsed(rowIndex) {
+  const sheets = await getSheets();
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SHEET_ID,
+    range: `topic!C${rowIndex}`,
+    valueInputOption: 'RAW',
+    requestBody: {
+      values: [['1']]
+    }
+  });
+}
+
+// ===== クリア =====
+async function clearUsed(totalRows) {
+  const sheets = await getSheets();
+
+  const values = Array(totalRows).fill(['']);
+
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SHEET_ID,
+    range: `topic!C2:C${totalRows + 1}`,
+    valueInputOption: 'RAW',
+    requestBody: { values }
+  });
+}
+
+// ===== ランダム =====
 function getRandom(list) {
   return list[Math.floor(Math.random() * list.length)];
 }
 
+// ===== メイン =====
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
   const cmd = interaction.commandName;
 
-  const rows = await getTopics();
+  const rows = await getRows();
+
+  const validRows = rows
+    .slice(1)
+    .map((r, i) => ({
+      type: r[0],
+      text: r[1],
+      used: r[2],
+      rowIndex: i + 2 // スプシ行番号
+    }))
+    .filter(r => r.type && r.text && !r.used);
+
+  // ===== clearコマンド =====
+  if (cmd === 'clear') {
+    await clearUsed(rows.length - 1);
+    return interaction.reply('使用済みフラグをリセットしたよ！');
+  }
 
   let filtered;
 
   if (cmd === 'tp') {
-    filtered = rows;
+    filtered = validRows.filter(r => ALL_TYPES.includes(r.type));
   } else {
-    filtered = rows.filter(r => r[0] === cmd);
+    filtered = validRows.filter(r => r.type === cmd);
   }
 
-  const texts = filtered.map(r => r[1]);
-
-  if (texts.length === 0) {
-    return interaction.reply('データがないよ！');
+  if (filtered.length === 0) {
+    return interaction.reply('もう全部使い切ったよ！/clear でリセットしてね');
   }
 
-  await interaction.reply(getRandom(texts));
+  const selected = getRandom(filtered);
+
+  await markAsUsed(selected.rowIndex);
+
+  await interaction.reply(selected.text);
 });
 
 client.once('ready', () => {
