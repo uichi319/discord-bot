@@ -20,6 +20,15 @@ const SHEET_ID = process.env.SHEET_ID;
 
 const ALL_TYPES = ['fd', 'pst', 'ftr', 'lv', 'ad'];
 
+// ★ カテゴリ表示用
+const CATEGORY_MAP = {
+  fd: '食べ物',
+  pst: '過去',
+  ftr: '未来',
+  lv: '恋愛',
+  ad: '大人'
+};
+
 // ===== Google Sheets =====
 async function getSheets() {
   const auth = new google.auth.GoogleAuth({
@@ -80,20 +89,19 @@ client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
   const cmd = interaction.commandName;
-
   const rows = await getRows();
 
   const validRows = rows
-    .slice(1)
+    .slice(1) // ヘッダ除外
     .map((r, i) => ({
       type: r[0],
       text: r[1],
       used: r[2],
-      rowIndex: i + 2 // スプシ行番号
+      rowIndex: i + 2
     }))
     .filter(r => r.type && r.text && !r.used);
 
-  // ===== clearコマンド =====
+  // ===== clear =====
   if (cmd === 'clear') {
     await clearUsed(rows.length - 1);
     return interaction.reply('使用済みフラグをリセットしたよ！');
@@ -113,9 +121,14 @@ client.on('interactionCreate', async interaction => {
 
   const selected = getRandom(filtered);
 
+  // 使用済みフラグON
   await markAsUsed(selected.rowIndex);
 
-  await interaction.reply(selected.text);
+  // ★ カテゴリ名取得
+  const categoryName = CATEGORY_MAP[selected.type] || selected.type;
+
+  // ★ 表示形式ここ
+  await interaction.reply(`【${categoryName}】\n${selected.text}`);
 });
 
 client.once('ready', () => {
