@@ -102,17 +102,31 @@ function isJapanese(text) {
 async function translateText(text, isJP) {
   const prompt = isJP
     ? `次の日本語を台湾で自然に使われる中国語に翻訳してください。
+
+【絶対ルール】
+・翻訳結果のみ出力
+・説明、補足、例は禁止
+・元の文章の長さ・改行はできるだけ維持
 ・カジュアルな会話調
 ・スラングOK
-・不自然な直訳は禁止
 
-${text}`
+入力：
+${text}
+
+出力：`
     : `次の中国語を自然な日本語に翻訳してください。
+
+【絶対ルール】
+・翻訳結果のみ出力
+・説明、補足、例は禁止
+・元の文章の長さ・改行はできるだけ維持
 ・カジュアルな会話調
 ・スラングOK
-・不自然な直訳は禁止
 
-${text}`;
+入力：
+${text}
+
+出力：`;
 
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -122,13 +136,31 @@ ${text}`;
     },
     body: JSON.stringify({
       model: 'gpt-4.1-mini',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.7
+      messages: [
+        {
+          role: 'system',
+          content: 'あなたは翻訳専用AIです。翻訳以外は絶対に出力しないでください。'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      temperature: 0.2,
+      max_tokens: 300
     })
   });
 
   const data = await res.json();
-  return data.choices[0].message.content.trim();
+  let result = data.choices[0].message.content.trim();
+
+  // 念のため「説明っぽい文」を除去（保険）
+  const NG_WORDS = ['例えば', '説明', '意味', 'これは', 'この表現', '場合'];
+  if (NG_WORDS.some(w => result.includes(w))) {
+    result = result.split('\n')[0]; // 怪しいときだけ1行に
+  }
+
+  return result;
 }
 
 // =======================
