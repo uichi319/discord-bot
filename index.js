@@ -96,7 +96,7 @@ function getRandom(list) {
 // =======================
 
 function isJapanese(text) {
-  return /[ぁ-んァ-ン一-龯]/.test(text);
+  return /[ぁ-んァ-ン]/.test(text);
 }
 
 async function translateText(text, isJP) {
