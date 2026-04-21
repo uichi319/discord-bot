@@ -12,15 +12,23 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT);
 
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds]
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent // ←翻訳に必要
+  ]
 });
 
 const TOKEN = process.env.TOKEN;
 const SHEET_ID = process.env.SHEET_ID;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+// ===== 翻訳チャンネル =====
+const TARGET_CHANNEL_ID = '1496019973175513219';
 
 const ALL_TYPES = ['fd', 'pst', 'ftr', 'lv', 'ad'];
 
-// ★ カテゴリ表示用
+// ===== カテゴリ表示 =====
 const CATEGORY_MAP = {
   fd: '食べ物',
   pst: '過去',
@@ -29,7 +37,10 @@ const CATEGORY_MAP = {
   ad: '大人'
 };
 
-// ===== Google Sheets =====
+// =======================
+// ===== Google Sheets ====
+// =======================
+
 async function getSheets() {
   const auth = new google.auth.GoogleAuth({
     credentials: JSON.parse(process.env.GOOGLE_CREDENTIALS),
@@ -39,7 +50,6 @@ async function getSheets() {
   return google.sheets({ version: 'v4', auth });
 }
 
-// ===== データ取得 =====
 async function getRows() {
   const sheets = await getSheets();
 
@@ -51,7 +61,6 @@ async function getRows() {
   return res.data.values || [];
 }
 
-// ===== 使用済み更新 =====
 async function markAsUsed(rowIndex) {
   const sheets = await getSheets();
 
@@ -65,7 +74,6 @@ async function markAsUsed(rowIndex) {
   });
 }
 
-// ===== クリア =====
 async function clearUsed(totalRows) {
   const sheets = await getSheets();
 
@@ -79,12 +87,54 @@ async function clearUsed(totalRows) {
   });
 }
 
-// ===== ランダム =====
 function getRandom(list) {
   return list[Math.floor(Math.random() * list.length)];
 }
 
-// ===== メイン =====
+// =======================
+// ===== 翻訳機能 =========
+// =======================
+
+function isJapanese(text) {
+  return /[ぁ-んァ-ン一-龯]/.test(text);
+}
+
+async function translateText(text, isJP) {
+  const prompt = isJP
+    ? `次の日本語を台湾で自然に使われる中国語に翻訳してください。
+・カジュアルな会話調
+・スラングOK
+・不自然な直訳は禁止
+
+${text}`
+    : `次の中国語を自然な日本語に翻訳してください。
+・カジュアルな会話調
+・スラングOK
+・不自然な直訳は禁止
+
+${text}`;
+
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'gpt-4.1-mini',
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.7
+    })
+  });
+
+  const data = await res.json();
+  return data.choices[0].message.content.trim();
+}
+
+// =======================
+// ===== Slashコマンド ====
+// =======================
+
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
@@ -92,7 +142,7 @@ client.on('interactionCreate', async interaction => {
   const rows = await getRows();
 
   const validRows = rows
-    .slice(1) // ヘッダ除外
+    .slice(1)
     .map((r, i) => ({
       type: r[0],
       text: r[1],
@@ -101,7 +151,6 @@ client.on('interactionCreate', async interaction => {
     }))
     .filter(r => r.type && r.text && !r.used);
 
-  // ===== clear =====
   if (cmd === 'clear') {
     await clearUsed(rows.length - 1);
     return interaction.reply('使用済みフラグをリセットしたよ！');
@@ -120,16 +169,38 @@ client.on('interactionCreate', async interaction => {
   }
 
   const selected = getRandom(filtered);
-
-  // 使用済みフラグON
   await markAsUsed(selected.rowIndex);
 
-  // ★ カテゴリ名取得
   const categoryName = CATEGORY_MAP[selected.type] || selected.type;
 
-  // ★ 表示形式ここ
   await interaction.reply(`【${categoryName}】\n${selected.text}`);
 });
+
+// =======================
+// ===== 翻訳BOT =========
+// =======================
+
+client.on('messageCreate', async (message) => {
+  if (message.author.bot) return;
+  if (message.channel.id !== TARGET_CHANNEL_ID) return;
+
+  try {
+    const text = message.content;
+    if (!text) return;
+
+    const jp = isJapanese(text);
+    const translated = await translateText(text, jp);
+
+    // ★ 名前付き表示
+    await message.reply(`💬 ${message.author.username}\n${translated}`);
+
+  } catch (err) {
+    console.error(err);
+    await message.reply('翻訳エラーが発生したよ');
+  }
+});
+
+// =======================
 
 client.once('ready', () => {
   console.log(`ログイン成功: ${client.user.tag}`);
