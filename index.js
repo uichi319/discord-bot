@@ -15,7 +15,7 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent // ←翻訳に必要
+    GatewayIntentBits.MessageContent
   ]
 });
 
@@ -23,15 +23,15 @@ const TOKEN = process.env.TOKEN;
 const SHEET_ID = process.env.SHEET_ID;
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
-// ===== 翻訳チャンネル =====
+// ===== 翻訳対象チャンネル =====
 const TARGET_CHANNEL_IDS = [
   '1496019973175513219',
   '1497824103783075910'
 ];
 
+// ===== 話題BOT =====
 const ALL_TYPES = ['fd', 'pst', 'ftr', 'lv', 'ad'];
 
-// ===== カテゴリ表示 =====
 const CATEGORY_MAP = {
   fd: '食べ物',
   pst: '過去',
@@ -50,7 +50,10 @@ async function getSheets() {
     scopes: ['https://www.googleapis.com/auth/spreadsheets']
   });
 
-  return google.sheets({ version: 'v4', auth });
+  return google.sheets({
+    version: 'v4',
+    auth
+  });
 }
 
 async function getRows() {
@@ -86,7 +89,9 @@ async function clearUsed(totalRows) {
     spreadsheetId: SHEET_ID,
     range: `topic!C2:C${totalRows + 1}`,
     valueInputOption: 'RAW',
-    requestBody: { values }
+    requestBody: {
+      values
+    }
   });
 }
 
@@ -95,53 +100,32 @@ function getRandom(list) {
 }
 
 // =======================
-// ===== 翻訳機能 =========
+// ===== 翻訳BOT =========
 // =======================
 
-function isJapanese(text) {
-  return /[ぁ-んァ-ン]/.test(text);
+// URLや記号だけなら翻訳しない
+function shouldSkipTranslate(text) {
+  if (!text) return true;
+  if (text.trim().length === 0) return true;
+  if (/^https?:\/\//i.test(text.trim())) return true;
+  if (/^[wWｗＷ草笑!！?？。、,.~～\s]+$/.test(text)) return true;
+  return false;
 }
 
-async function translateText(text, isJP, contextMessages = []) {
-  const contextText = contextMessages
-    .map(m => `${m.author.username}: ${m.content}`)
-    .join('\n');
+// ===== AI言語判定 =====
+async function detectLanguage(text) {
+  const prompt = `
+次の文章が日本語か台湾で使われる繁体字中国語か判定してください。
 
-  const prompt = isJP
-    ? `次の日本語を台湾で自然に使われる中国語に翻訳してください。
+ルール:
+- 日本語なら jp
+- 繁体字中国語なら tw
+- 短文やネットスラングでも意味から判定
+- 出力は jp または tw のみ
 
-【絶対ルール】
-・翻訳結果のみ出力
-・説明、補足例は禁止
-・元の文章の長さ・改行はできるだけ維持
-・文脈を考慮して自然に
-・カジュアルな会話調
-・スラングOK
-
-【会話履歴】
-${contextText}
-
-【入力】
+文章:
 ${text}
-
-【出力】`
-    : `次の中国語を自然な日本語に翻訳してください。
-
-【絶対ルール】
-・翻訳結果のみ出力
-・説明、補足例は禁止
-・元の文章の長さ・改行はできるだけ維持
-・文脈を考慮して自然に
-・カジュアルな会話調
-・スラングOK
-
-【会話履歴】
-${contextText}
-
-【入力】
-${text}
-
-【出力】`;
+`;
 
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -154,7 +138,74 @@ ${text}
       messages: [
         {
           role: 'system',
-          content: 'あなたは翻訳専用AIです。翻訳のみ返答してください。'
+          content: 'あなたは言語判定AIです。jp か tw のみ返答してください。'
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      temperature: 0,
+      max_tokens: 5
+    })
+  });
+
+  const data = await res.json();
+
+  let result = data?.choices?.[0]?.message?.content?.trim().toLowerCase();
+
+  if (result !== 'jp' && result !== 'tw') {
+    result = 'jp';
+  }
+
+  return result;
+}
+
+// ===== AI翻訳 =====
+async function translateText(text, lang) {
+  const prompt =
+    lang === 'jp'
+      ? `
+次の日本語を台湾で自然に使われる繁体字中国語へ翻訳してください。
+
+重要ルール:
+・翻訳結果のみ出力
+・説明、補足、例文は禁止
+・意味が自然に伝わる表現にする
+・直訳しすぎない
+・会話向けの自然な口調
+・スラングは自然に変換
+
+入力:
+${text}
+`
+      : `
+次の繁体字中国語を自然な日本語へ翻訳してください。
+
+重要ルール:
+・翻訳結果のみ出力
+・説明、補足、例文は禁止
+・意味が自然に伝わる表現にする
+・直訳しすぎない
+・日本人が普段使う自然な口調
+・スラングは自然に変換
+
+入力:
+${text}
+`;
+
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: 'gpt-4.1-mini',
+      messages: [
+        {
+          role: 'system',
+          content: 'あなたは高品質な翻訳AIです。翻訳結果のみ返答してください。'
         },
         {
           role: 'user',
@@ -167,16 +218,16 @@ ${text}
   });
 
   const data = await res.json();
-  return data.choices[0].message.content.trim();
 
-  // 念のため「説明っぽい文」を除去（保険）
-  const NG_WORDS = ['例えば', '説明', '意味', 'これは', 'この表現', '場合'];
-  if (NG_WORDS.some(w => result.includes(w))) {
-    result = result.split('\n')[0]; // 怪しいときだけ1行に
+  let result = data?.choices?.[0]?.message?.content?.trim() || '翻訳失敗';
+
+  // 余計な説明が出た時の保険
+  const ngWords = ['説明', '意味', '例えば', 'この表現', '補足'];
+  if (ngWords.some(word => result.includes(word))) {
+    result = result.split('\n')[0];
   }
 
   return result;
-
 }
 
 // =======================
@@ -186,66 +237,67 @@ ${text}
 client.on('interactionCreate', async interaction => {
   if (!interaction.isChatInputCommand()) return;
 
-  const cmd = interaction.commandName;
-  const rows = await getRows();
+  try {
+    const cmd = interaction.commandName;
+    const rows = await getRows();
 
-  const validRows = rows
-    .slice(1)
-    .map((r, i) => ({
-      type: r[0],
-      text: r[1],
-      used: r[2],
-      rowIndex: i + 2
-    }))
-    .filter(r => r.type && r.text && !r.used);
+    const validRows = rows
+      .slice(1)
+      .map((r, i) => ({
+        type: r[0],
+        text: r[1],
+        used: r[2],
+        rowIndex: i + 2
+      }))
+      .filter(r => r.type && r.text && !r.used);
 
-  if (cmd === 'clear') {
-    await clearUsed(rows.length - 1);
-    return interaction.reply('使用済みフラグをリセットしたよ！');
+    if (cmd === 'clear') {
+      await clearUsed(rows.length - 1);
+      return interaction.reply('使用済みフラグをリセットしたよ！');
+    }
+
+    let filtered;
+
+    if (cmd === 'tp') {
+      filtered = validRows.filter(r => ALL_TYPES.includes(r.type));
+    } else {
+      filtered = validRows.filter(r => r.type === cmd);
+    }
+
+    if (filtered.length === 0) {
+      return interaction.reply('もう全部使い切ったよ！/clear でリセットしてね');
+    }
+
+    const selected = getRandom(filtered);
+
+    await markAsUsed(selected.rowIndex);
+
+    const categoryName = CATEGORY_MAP[selected.type] || selected.type;
+
+    await interaction.reply(`【${categoryName}】\n${selected.text}`);
+
+  } catch (err) {
+    console.error(err);
+    await interaction.reply('エラーが発生したよ');
   }
-
-  let filtered;
-
-  if (cmd === 'tp') {
-    filtered = validRows.filter(r => ALL_TYPES.includes(r.type));
-  } else {
-    filtered = validRows.filter(r => r.type === cmd);
-  }
-
-  if (filtered.length === 0) {
-    return interaction.reply('もう全部使い切ったよ！/clear でリセットしてね');
-  }
-
-  const selected = getRandom(filtered);
-  await markAsUsed(selected.rowIndex);
-
-  const categoryName = CATEGORY_MAP[selected.type] || selected.type;
-
-  await interaction.reply(`【${categoryName}】\n${selected.text}`);
 });
 
 // =======================
 // ===== 翻訳BOT =========
 // =======================
 
-client.on('messageCreate', async (message) => {
+client.on('messageCreate', async message => {
   if (message.author.bot) return;
   if (!TARGET_CHANNEL_IDS.includes(message.channel.id)) return;
 
   try {
-    const text = message.content;
-    if (!text) return;
+    const text = message.content?.trim();
 
-    // 👇 直近メッセージ取得（最大5件）
-    const messages = await message.channel.messages.fetch({ limit: 6 });
+    if (shouldSkipTranslate(text)) return;
 
-    const contextMessages = Array.from(messages.values())
-      .filter(m => !m.author.bot && m.id !== message.id)
-      .slice(0, 5)
-      .reverse();
+    const lang = await detectLanguage(text);
 
-    const jp = isJapanese(text);
-    const translated = await translateText(text, jp, contextMessages);
+    const translated = await translateText(text, lang);
 
     await message.reply(`💬 ${message.author.username}\n${translated}`);
 
